@@ -1,0 +1,17 @@
+﻿data/
+attachments/
+out/
+*.db
+*.db-shm
+*.db-wal
+*.log
+.env
+.env.*
+!.env.example
+target/
+build/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+ConnectX_Source.zip
