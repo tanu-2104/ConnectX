@@ -29,6 +29,8 @@ public class ChatServer {
 
         System.out.println("Starting ConnectX Chat Server...");
 
+        Database.initializeDatabase();
+
         try {
             Files.createDirectories(ATTACHMENT_FOLDER);
         } catch (IOException e) {
@@ -36,7 +38,8 @@ public class ChatServer {
             return;
         }
 
-        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
+        try (javax.net.ssl.SSLServerSocket serverSocket = (javax.net.ssl.SSLServerSocket) com.connectx.security.TlsConfig.createServerContext().getServerSocketFactory().createServerSocket(PORT)) {
+            serverSocket.setEnabledProtocols(new String[] {"TLSv1.3", "TLSv1.2"});
 
             System.out.println("ConnectX server started on port " + PORT);
 
@@ -212,32 +215,78 @@ public class ChatServer {
 
                 String login = reader.readLine();
 
-                if (login == null || !login.startsWith("LOGIN|")) {
-                    socket.close();
+                if (login == null) {
                     return;
                 }
 
-                username = decode(login.substring(6)).trim();
+                String[] authParts = login.split("\\|", -1);
 
-                if (username.isEmpty()) {
-                    writer.println("ERROR|Invalid username.");
-                    socket.close();
+                if ("REGISTER".equals(authParts[0])) {
+
+                    if (authParts.length != 4) {
+                        writer.println("REGISTER_FAILED|" +
+                                encode("Invalid registration request."));
+                        return;
+                    }
+
+                    String newUsername = decode(authParts[1]).trim();
+                    String email = decode(authParts[2]).trim();
+                    String password = decode(authParts[3]);
+
+                    if (newUsername.isEmpty() || email.isEmpty()
+                            || password.length() < 8) {
+                        writer.println("REGISTER_FAILED|" +
+                                encode("Please provide valid registration details."));
+                        return;
+                    }
+
+                    String result = UserDAO.registerUser(
+                            newUsername, email, password
+                    );
+
+                    if ("SUCCESS".equals(result)) {
+                        writer.println("REGISTER_OK");
+                    } else {
+                        writer.println("REGISTER_FAILED|" + encode(result));
+                    }
+
                     return;
                 }
 
-                PrintWriter existing = clients.putIfAbsent(username, writer);
+                if (!"LOGIN".equals(authParts[0])
+                        || authParts.length != 3) {
+                    writer.println("AUTH_FAILED|" +
+                            encode("Invalid login request."));
+                    return;
+                }
+
+                String requestedUsername = decode(authParts[1]).trim();
+                String password = decode(authParts[2]);
+
+                if (requestedUsername.isEmpty() || password.isEmpty()
+                        || !UserDAO.loginUser(requestedUsername, password)) {
+                    writer.println("AUTH_FAILED|" +
+                            encode("Invalid username or password."));
+                    return;
+                }
+
+                PrintWriter existing =
+                        clients.putIfAbsent(requestedUsername, writer);
 
                 if (existing != null) {
-                    writer.println("ERROR|This user is already online.");
-                    socket.close();
+                    writer.println("AUTH_FAILED|" +
+                            encode("This user is already online."));
                     return;
                 }
+
+                username = requestedUsername;
+
+                writer.println("AUTH_OK");
 
                 System.out.println(username + " connected.");
 
                 writer.println("SYSTEM|Connected as " + username);
                 broadcastUserList();
-
                 String message;
 
                 while ((message = reader.readLine()) != null) {
@@ -245,6 +294,54 @@ public class ChatServer {
                     String[] parts = message.split("\\|", -1);
 
                     switch (parts[0]) {
+                        case "HISTORY":
+
+                            if (parts.length != 2) {
+                                writer.println("ERROR|Invalid history request.");
+                                break;
+                            }
+
+                            String partner = decode(parts[1]);
+
+                            if (!UserDAO.userExists(partner)) {
+                                writer.println("ERROR|User not found.");
+                                break;
+                            }
+
+                            try {
+                                java.util.List<MessageDAO.ChatMessage> history =
+                                        MessageDAO.getPrivateChatHistoryRecords(
+                                                username, partner);
+
+                                for (MessageDAO.ChatMessage record : history) {
+                                    String attachmentData = "";
+
+                                    if (record.attachmentData != null) {
+                                        attachmentData = Base64.getEncoder()
+                                                .encodeToString(record.attachmentData);
+                                    }
+
+                                    writer.println(
+                                            "HISTORY_ITEM|" +
+                                            record.id + "|" +
+                                            encode(record.sender) + "|" +
+                                            encode(record.message) + "|" +
+                                            encode(record.sentAt) + "|" +
+                                            encode(record.attachmentName) + "|" +
+                                            encode(record.mimeType) + "|" +
+                                            attachmentData
+                                    );
+                                }
+
+                                writer.println("HISTORY_DONE");
+
+                            } catch (Exception e) {
+                                writer.println("ERROR|Could not load chat history.");
+                                System.out.println("History error: " + e.getMessage());
+                            }
+
+                            break;
+
 
                         case "PROFILE_UPDATE":
 

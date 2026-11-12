@@ -66,10 +66,12 @@ public class DashboardPanel extends JPanel {
     private static final Color GREEN = new Color(52, 211, 153);
 
     public DashboardPanel(JFrame frame, String username,
+                         ChatClient chatClient,
                          Runnable logoutAction) {
 
         this.frame = frame;
         this.username = username;
+        this.chatClient = chatClient;
         this.logoutAction = logoutAction;
 
         setLayout(new BorderLayout());
@@ -211,6 +213,8 @@ public class DashboardPanel extends JPanel {
         messagesContainer.add(row);
         refreshMessages();
     }
+
+    private int historyMessageCount = 0;
 
     // ================= CHAT BUBBLES =================
 
@@ -651,17 +655,12 @@ public class DashboardPanel extends JPanel {
 
         clearMessages();
 
-        List<String> history =
-                MessageDAO.getPrivateChatHistory(
-                        username, receiver);
+        historyMessageCount = 0;
 
-        if (history.isEmpty()) {
-            appendSystemText(
-                    "No previous messages. Say hello and start chatting!");
+        if (chatClient != null && chatClient.isConnected()) {
+            chatClient.requestHistory(receiver);
         } else {
-            for (String message : history) {
-                appendHistoryMessage(message);
-            }
+            appendSystemText("Not connected to the chat server.");
         }
 
         refreshMessages();
@@ -1010,13 +1009,58 @@ public class DashboardPanel extends JPanel {
 
     private void connectToServer() {
 
-        chatClient = new ChatClient();
+
 
         chatClient.setMessageListener(message -> {
 
             SwingUtilities.invokeLater(() -> {
 
-                if (message.startsWith("USERLIST|")) {
+                if (message.startsWith("HISTORY_ITEM|")) {
+
+                    try {
+                        String[] parts = message.split("\\|", -1);
+
+                        if (parts.length >= 8) {
+                            String sender = decode(parts[2]);
+                            String text = decode(parts[3]);
+                            String fileName = decode(parts[5]);
+
+                            boolean own = sender.equalsIgnoreCase(username);
+
+                            if (!fileName.isBlank()) {
+                                byte[] fileData;
+
+                                try {
+                                    fileData = Base64.getDecoder().decode(parts[7]);
+                                } catch (Exception ex) {
+                                    fileData = Base64.getUrlDecoder().decode(parts[7]);
+                                }
+
+                                appendAttachmentBubble(
+                                        sender, fileName, fileData, own);
+                            }
+
+                            if (!text.isBlank()) {
+                                appendBubble(sender, text, own);
+                            }
+
+                            historyMessageCount++;
+                        }
+                    } catch (Exception ex) {
+                        System.err.println(
+                                "Could not display history item: " + ex.getMessage());
+                    }
+
+                } else if (message.equals("HISTORY_DONE")) {
+
+                    if (historyMessageCount == 0) {
+                        appendSystemText(
+                                "No previous messages. Say hello and start chatting!");
+                    }
+
+                    refreshMessages();
+
+                } else if (message.startsWith("USERLIST|")) {
 
                     updateOnlineUsers(message);
 
@@ -1089,23 +1133,10 @@ public class DashboardPanel extends JPanel {
             });
         });
 
-        try {
+    }
 
-            connected = chatClient.connect(username);
-
-            if (!connected) {
-                appendSystemText(
-                        "Could not connect to the server.");
-            }
-
-        } catch (Exception e) {
-
-            connected = false;
-
-            appendSystemText(
-                    "Could not connect to server: "
-                            + e.getMessage());
-        }
+    public void markConnected() {
+        connected = chatClient != null && chatClient.isConnected();
     }
 
     // ================= CUSTOM SIDEBAR ICON =================
@@ -1750,10 +1781,11 @@ public class DashboardPanel extends JPanel {
 
     public static void showDashboard(
             JFrame frame, String username,
+            ChatClient chatClient,
             Runnable logoutAction) {
 
         DashboardPanel dashboard = new DashboardPanel(
-                frame, username, logoutAction);
+                frame, username, chatClient, logoutAction);
 
         frame.setContentPane(dashboard);
         frame.revalidate();

@@ -2,6 +2,7 @@
 package com.connectx.app;
 
 import com.connectx.gui.DashboardPanel;
+import com.connectx.client.ChatClient;
 import com.connectx.database.Database;
 import com.connectx.database.UserDAO;
 
@@ -502,19 +503,16 @@ public class Main {
 
                 showMessage("Please enter username and password.");
 
-            } else if (UserDAO.loginUser(username, password)) {
+            } else {
 
-                JOptionPane.showMessageDialog(
-                    frame,
-                    "Login successful!",
-                    "ConnectX",
-                    JOptionPane.INFORMATION_MESSAGE
-                );
+                ChatClient chatClient = new ChatClient();
 
                 DashboardPanel dashboard = new DashboardPanel(
                     frame,
                     username,
+                    chatClient,
                     () -> {
+                        chatClient.disconnect();
                         frame.setContentPane(mainPanel);
                         cardLayout.show(cardPanel, "LOGIN");
                         frame.revalidate();
@@ -522,13 +520,31 @@ public class Main {
                     }
                 );
 
-                frame.setContentPane(dashboard);
-                frame.revalidate();
-                frame.repaint();
+                if (chatClient.connect(username, password)) {
 
-            } else {
+                    dashboard.markConnected();
 
-                showMessage("Invalid username or password.");
+                    JOptionPane.showMessageDialog(
+                        frame,
+                        "Login successful!",
+                        "ConnectX",
+                        JOptionPane.INFORMATION_MESSAGE
+                    );
+
+                    passwordField.setText("");
+                    frame.setContentPane(dashboard);
+                    frame.revalidate();
+                    frame.repaint();
+
+                } else {
+
+                    chatClient.disconnect();
+
+                    showMessage(
+                        "Unable to login. Check your username, password, "
+                        + "server connection and TLS certificate."
+                    );
+                }
             }
         });
 
@@ -621,11 +637,7 @@ public class Main {
 
             } else {
 
-                String result = UserDAO.registerUser(
-                    username,
-                    email,
-                    password
-                );
+                String result = ChatClient.register(username, email, password);
 
                 if (result.equals("SUCCESS")) {
 
